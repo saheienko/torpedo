@@ -101,6 +101,82 @@ var _ = Describe(fmt.Sprintf("{%sBasic}", testNameSuite), func() {
 	})
 })
 
+// This test performs volume driver down during volume resize using autopilot rule
+var _ = Describe(fmt.Sprintf("{%sVolumeDriverDown}", testNameSuite), func() {
+	It("has to schedule apps and stop volume driver on app nodes", func() {
+		var contexts []*scheduler.Context
+		var err error
+		testName := strings.ToLower(fmt.Sprintf("%sVolumeDriverDown", testNameSuite))
+
+		apParameters := &scheduler.AutopilotParameters{
+			Enabled: true,
+			Name:    testName,
+			AutopilotRuleParameters: scheduler.AutopilotRuleParameters{
+				ActionsCoolDownPeriod: 60,
+				PVCWorkloadSize:       10737418240, //10Gb
+				PVCPercentageUsage:    50,
+				PVCPercentageScale:    50,
+			},
+		}
+
+		Step("schedule applications", func() {
+			for i := 0; i < Inst().ScaleFactor; i++ {
+				taskName := fmt.Sprintf("%s-%v", fmt.Sprintf("%s-%d", testName, i), Inst().InstanceID)
+				context, err := Inst().S.Schedule(taskName, scheduler.ScheduleOptions{
+					AppKeys:             Inst().AppList,
+					StorageProvisioner:  Inst().Provisioner,
+					AutopilotParameters: apParameters,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(context).NotTo(BeEmpty())
+				contexts = append(contexts, context...)
+			}
+		})
+
+		Step("wait until workload completes on volume", func() {
+			for _, ctx := range contexts {
+				err = Inst().S.WaitForRunning(ctx, workloadTimeout, retryInterval)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+		Step("get nodes for all apps in test and bounce volume driver", func() {
+			for _, ctx := range contexts {
+				appNodes := GetNodesThatCanBeDown(ctx)
+				Step(
+					fmt.Sprintf("stop volume driver %s on app %s's nodes: %v",
+						Inst().V.String(), ctx.App.Key, appNodes),
+					func() {
+						StopVolDriverAndWait(appNodes)
+					})
+
+				Step("starting volume driver", func() {
+					StartVolDriverAndWait(appNodes)
+				})
+
+				Step("Giving few seconds for volume driver to stabilize", func() {
+					time.Sleep(20 * time.Second)
+				})
+			}
+		})
+
+		Step("validating volumes and verifying size of volumes", func() {
+			for _, ctx := range contexts {
+				err = Inst().S.InspectVolumes(ctx, timeout, retryInterval)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+		Step("destroy apps", func() {
+			opts := make(map[string]bool)
+			opts[scheduler.OptionsWaitForResourceLeakCleanup] = true
+			for _, ctx := range contexts {
+				TearDownContext(ctx, opts)
+			}
+		})
+	})
+})
+
 var _ = AfterSuite(func() {
 	PerformSystemCheck()
 	ValidateCleanup()
