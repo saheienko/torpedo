@@ -119,3 +119,30 @@ spec:
       resources:
         requests:
           storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-load
+  namespace: default
+  labels:
+    app: es-load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: es-load
+  template:
+    metadata:
+      labels:
+        app: es-load
+    spec:
+      containers:
+      - name: es-load
+        image: serhiiqbox/px-enterprise:es-stress-test
+        command:
+          - /bin/bash
+          - -c
+          - "while true; do echo '=========='; python elasticsearch-stress-test.py --es_address esnode-0.elasticsearch-cluster.default.svc.cluster.local:9200 --indices 4 --documents 5 --seconds 120 --not-green --clients 1; sleep 5; done"
+      restartPolicy: Always
+
